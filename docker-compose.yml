@@ -1,0 +1,48 @@
+services:
+  user-service:
+    build:
+      context: .
+      dockerfile: services/user_service/Dockerfile
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./logs:/app/logs
+
+  catalog-service:
+    build:
+      context: .
+      dockerfile: services/catalog_service/Dockerfile
+    ports:
+      - "8003:8003"
+    volumes:
+      - ./logs:/app/logs
+
+  playlist-service:
+    build:
+      context: .
+      dockerfile: services/playlist_service/Dockerfile
+    ports:
+      - "8002:8002"
+    environment:
+      - CATALOG_SERVICE_URL=http://catalog-service:8003
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - catalog-service
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - USER_SERVICE_URL=http://user-service:8001
+      - PLAYLIST_SERVICE_URL=http://playlist-service:8002
+      - CATALOG_SERVICE_URL=http://catalog-service:8003
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - user-service
+      - playlist-service
+      - catalog-service

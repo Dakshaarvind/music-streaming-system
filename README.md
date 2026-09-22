@@ -1,0 +1,184 @@
+# Distributed Music Streaming System — Milestone 1
+
+A university Distributed Systems course project. Milestone 1 delivers the
+architecture and a basic running skeleton: three-plus communicating
+services, a client request/response, and end-to-end logging of the
+messages exchanged between components.
+
+See [docs/architecture.md](docs/architecture.md) for the full architecture
+diagram, request-flow sequence diagram, and system-model assumptions.
+
+## Services (this milestone)
+
+| Service | Port | Purpose |
+|---|---|---|
+| API Gateway | 8000 | Single client entry point; routing; request IDs |
+| User Service | 8001 | Account lookup |
+| Playlist Service | 8002 | Playlists; hydrates track metadata from Catalog |
+| Catalog Service | 8003 | Track metadata |
+
+## Required software
+
+- Docker and Docker Compose (Compose v2, i.e. `docker compose`, not `docker-compose`)
+- Python 3.11+ (only needed to run `scripts/` and `pytest` from the host; the services themselves run inside containers)
+
+## Install dependencies
+
+For running the demo/trace scripts and tests from the host (not required
+just to run the services in Docker):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+## Start everything
+
+### With Docker Compose (recommended)
+
+```bash
+docker compose up --build
+```
+
+This builds and starts all four services. Verify they're up:
+
+```bash
+curl http://localhost:8000/health
+curl http://localhost:8001/health
+curl http://localhost:8002/health
+curl http://localhost:8003/health
+```
+
+Each should return `{"status": "ok", "service": "..."}`.
+
+Logs are written to stdout (visible via `docker compose logs -f <service>`)
+and to `logs/<service>.log` on the host, since `./logs` is mounted as a
+volume into every container.
+
+### Without Docker (running one service locally)
+
+From the repo root, with dependencies installed (see above):
+
+```bash
+# Terminal 1
+uvicorn services.user_service.main:app --port 8001
+
+# Terminal 2
+uvicorn services.catalog_service.main:app --port 8003
+
+# Terminal 3
+CATALOG_SERVICE_URL=http://localhost:8003 \
+  uvicorn services.playlist_service.main:app --port 8002
+
+# Terminal 4
+USER_SERVICE_URL=http://localhost:8001 \
+PLAYLIST_SERVICE_URL=http://localhost:8002 \
+CATALOG_SERVICE_URL=http://localhost:8003 \
+  uvicorn services.gateway.main:app --port 8000
+```
+
+Each service reads its downstream URLs from environment variables, so this
+works the same whether services run in containers or as local processes.
+
+## Run the demo
+
+With the stack running (Docker or local):
+
+```bash
+python scripts/demo.py
+```
+
+This sends:
+1. `GET /users/42/playlists` — the main multi-hop demo request (gateway → user-service → playlist-service → catalog-service).
+2. `POST /users/42/playlists` — creates a playlist through the same gateway → user → playlist path.
+3. `GET /users/9999/playlists` — an unknown user, to show the 404 path.
+4. `GET /tracks/1` — a direct catalog lookup through the gateway.
+
+Each call prints its correlation ID (`X-Request-ID`) and a ready-to-run
+`trace.py` command.
+
+## Trace a request
+
+```bash
+python scripts/trace.py <request_id>
+```
+
+Merges every `logs/<service>.log` file and prints the matching entries in
+timestamp order — the full path of that one request across all services.
+This is the easiest way to see the correlation ID propagating end to end.
+
+## Run the tests
+
+Tests are integration tests that run against the live stack, so start it
+first:
+
+```bash
+docker compose up --build -d
+pip install -r requirements.txt   # if not already installed
+pytest
+```
+
+- `tests/test_happy_path.py` exercises the end-to-end flow through the
+  gateway (health checks, fetching/creating playlists, 404 for an unknown
+  user, correlation ID propagation).
+- `tests/test_degraded.py` exercises fault handling. It shells out to
+  `docker compose stop catalog-service` / `docker compose stop
+  user-service` (and restarts them afterward) to prove:
+  - with the catalog down, playlist responses still succeed but come back
+    with `"degraded": true` and track IDs only (no titles);
+  - with the user service down, the gateway returns `503`.
+
+  These tests require the stack to be running via Docker Compose (not the
+  local-uvicorn setup), since they need real containers to stop and start.
+  If the stack isn't reachable, both test files skip automatically instead
+  of failing.
+
+## Logging
+
+Every service logs one JSON object per line to stdout and to
+`logs/<service>.log`, including:
+
+- `timestamp`, `service`, `request_id`
+- `direction`: `RECV_REQUEST` / `SEND_REQUEST` / `RECV_RESPONSE` / `SEND_RESPONSE`
+- `peer`, `method`, `path`
+- `status` and `latency_ms` on responses
+
+The gateway assigns an `X-Request-ID` if the client doesn't send one; every
+service forwards it on outbound calls so the whole chain shares one ID.
+This is implemented once as shared middleware/client code in
+[common/logging_utils.py](common/logging_utils.py) and
+[common/http_client.py](common/http_client.py) — no ad hoc `print`s in any
+service.
+
+## Planned services (later milestones)
+
+Not implemented yet — mentioned here for context:
+
+- **Playback Session Service** — current track/position per user, one
+  active device per account.
+- **Recommendation Service** — consumes play events asynchronously,
+  degrades gracefully when unavailable.
+- **Content / Peer layer** — audio chunks served from storage nodes, with
+  clients acting as peers sharing cached chunks (P2P integration).
+
+## Repo structure
+
+```
+.
+├── common/                   # shared JSON logger + HTTP client wrapper
+├── services/
+│   ├── gateway/
+│   ├── user_service/
+│   ├── playlist_service/
+│   └── catalog_service/
+├── scripts/
+│   ├── demo.py                # runs the demo requests
+│   └── trace.py                # reconstructs one request's path from logs
+├── tests/
+│   ├── test_happy_path.py
+│   └── test_degraded.py
+├── docs/
+│   └── architecture.md        # Mermaid diagrams + system-model assumptions
+└── logs/                      # gitignored, mounted as a volume
+```
