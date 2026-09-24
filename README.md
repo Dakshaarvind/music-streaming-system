@@ -1,6 +1,6 @@
-# Distributed Music Streaming System — Milestone 1
+# Distributed Music Streaming System
 
-A university Distributed Systems course project. Milestone 1 delivers the
+Milestone 1 delivers the
 architecture and a basic running skeleton: three-plus communicating
 services, a client request/response, and end-to-end logging of the
 messages exchanged between components.
