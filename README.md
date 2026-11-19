@@ -225,3 +225,43 @@ The script `milestone3_p2p.py` is structured as a chronological sequence of auto
 2.  **Peer Join:** Node 9004 is instantiated and routes a `FIND_SUCCESSOR` request to insert itself into the hash space.
 3.  **Lookup & Discovery:** A client generates a SHA-1 hash for `track_101_chunk_01.aac` and issues a lookup. The nodes traverse their successor pointers until the responsible node is located and the chunk is cached.
 4.  **Graceful Leave:** Node 9002 executes the `leave()` method, issuing `UPDATE_SUCCESSOR` and `NOTIFY` messages to heal the ring before closing its socket.
+
+
+## Milestone 4: Coordination (Lamport clocks, Bully election, distributed mutex)
+
+Full design and report material: [docs/milestone4.md](docs/milestone4.md).
+
+### Required software
+* Python 3.9+; standard library only, no pip install needed. `pytest` is only needed to run the tests.
+
+### What it does
+* 5 nodes (N1-N5), each a separate process on TCP ports 9101-9105, each with a **Lamport clock**. Every message carries `ts`.
+* **Bully leader election**: the highest live id is the coordinator. Heartbeats detect a leader crash.
+* **Centralized mutual exclusion**: the elected leader grants a lock. Waiting nodes are queued by Lamport timestamp.
+* **Shared resource**: a collaborative playlist file `data/m4/shared_playlist.json`, edited read-modify-write. It is protected by the lock plus fencing tokens.
+* **Event ordering**: `merge_logs` merges all node logs into one `(Lamport, node)` total order and verifies causality and mutual exclusion.
+
+### One-command demo
+```bash
+python3 -m milestone4.demo            # add M4_STEP=1 to pause between phases
+```
+The demo runs these phases: startup election, then concurrent writes without the lock (lost updates), then with the lock (all kept), then coordinator crash while the lock is held (re-election and recovery), then the old leader restarting, and finally the merged ordered log with a PASS/FAIL verification.
+
+### Manual multi-terminal run
+```bash
+python3 -m milestone4.client reset                 # once, before starting nodes
+python3 -m milestone4.node --id 1                  # terminals 1-5, ids 1..5
+python3 -m milestone4.client status                # leader / term / clock / lock queue
+python3 -m milestone4.client burst                 # all nodes edit at once, with the lock
+python3 -m milestone4.client burst --unsafe        # same, without the lock -> lost updates
+python3 -m milestone4.client burst --hold 4        # long critical sections (time to crash the leader)
+python3 -m milestone4.client playlist [--unsafe]
+python3 -m milestone4.client crash --node 5        # or press Ctrl+C in N5's terminal
+python3 -m milestone4.merge_logs --key --verify    # ordered events + checks
+```
+
+### Tests
+```bash
+python -m pytest tests/test_milestone4.py -v
+```
+The tests cover the Lamport rules, fencing tokens, Bully election, serialized writes, unsafe-mode lost updates, coordinator crash, recovery and leader return, and lock-holder crash.
